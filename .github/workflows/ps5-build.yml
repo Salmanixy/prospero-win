@@ -1,86 +1,144 @@
-name: Build PS5 App
+name: Build PS5
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build Prospero-Win PS5
     runs-on: ubuntu-24.04
+    timeout-minutes: 240
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |
           sudo apt-get update
+
           sudo apt-get install -y \
             build-essential \
             clang \
             clang-18 \
+            llvm \
             llvm-18 \
-            llvm-18-tools \
             lld \
-            lld-18 \
             python3 \
             python3-pip \
+            python3-venv \
             git \
-            wget \
             curl \
+            wget \
             pkg-config \
-            gcc-multilib \
-            g++-multilib \
             zip \
             unzip \
-            make \
             file \
-            binutils
+            flex \
+            bison \
+            gettext \
+            autoconf \
+            automake \
+            libtool \
+            libx11-dev \
+            libxext-dev \
+            libxrender-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            gcc-multilib \
+            g++-multilib
 
       - name: Install Python dependencies
         run: |
-          python3 -m pip install --user pyyaml
+          python3 -m pip install --user --break-system-packages pyyaml
+
+      - name: Check repository
+        run: |
+          git status
+          git submodule status
 
       - name: Check setup
         run: |
           python3 tools/check_setup.py
 
-      - name: Build PS5 native application
+      - name: Make scripts executable
         run: |
           chmod +x tools/build_native.sh
-          tools/build_native.sh
+          chmod +x tools/build_wine_runtime.sh
+          chmod +x tools/build_wine_ps5.sh
 
+      # ---------------------------------------------------------
+      # 1. Build the PS5 native foundation/application
+      # ---------------------------------------------------------
+      - name: Build native PS5 application
+        run: |
+          ./tools/build_native.sh
+
+      # ---------------------------------------------------------
+      # 2. Build HOST Wine
+      #
+      # This creates:
+      # .deps/wine/build/tools/winebuild
+      #
+      # build_wine_ps5.sh requires this.
+      # ---------------------------------------------------------
+      - name: Build host Wine runtime
+        run: |
+          ./tools/build_wine_runtime.sh
+
+      # ---------------------------------------------------------
+      # 3. Build Wine for PS5
+      # ---------------------------------------------------------
       - name: Build Wine PS5 modules
         run: |
-          chmod +x tools/build_wine_ps5.sh
-          tools/build_wine_ps5.sh
+          ./tools/build_wine_ps5.sh
 
-      - name: Show output
+      # ---------------------------------------------------------
+      # Show everything that was generated
+      # ---------------------------------------------------------
+      - name: Show build output
         if: always()
+        shell: bash
         run: |
-          echo "===== DIST ====="
-          find dist -maxdepth 5 -type f -print 2>/dev/null || true
+          echo "========================================"
+          echo "DIST"
+          echo "========================================"
+          find dist -maxdepth 8 -type f -print 2>/dev/null || true
 
-          echo "===== BUILD ====="
-          find build -maxdepth 5 -type f -print 2>/dev/null | head -500
+          echo "========================================"
+          echo "BUILD"
+          echo "========================================"
+          find build -maxdepth 8 -type f -print 2>/dev/null | head -1000 || true
 
-      - name: Package PS5 build
-        run: |
-          mkdir -p artifacts
-          if [ -d dist ]; then
-            cp -a dist/. artifacts/
-          fi
-          if [ -d build ]; then
-            cp -a build artifacts/build
-          fi
+          echo "========================================"
+          echo "WINE"
+          echo "========================================"
+          find .deps/wine -maxdepth 5 -type f -print 2>/dev/null | head -1000 || true
 
-          cd artifacts
-          zip -r ../prospero-win-ps5.zip .
+          echo "========================================"
+          echo "WINE PS5"
+          echo "========================================"
+          find .deps/wine-ps5 -maxdepth 8 -type f -print 2>/dev/null | head -1000 || true
 
+      # ---------------------------------------------------------
+      # Upload final files
+      # ---------------------------------------------------------
       - name: Upload PS5 build
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: prospero-win-ps5
-          path: prospero-win-ps5.zip
+          path: |
+            dist/**
+            build/**
+            .deps/wine-runtime/**
+            .deps/wine-ps5/**
           if-no-files-found: error
+          retention-days: 7
