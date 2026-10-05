@@ -3,11 +3,14 @@ name: Build PS5
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Build Prospero-Win PS5
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -23,26 +26,28 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             clang \
-            clang-18 \
             llvm \
-            llvm-18 \
             lld \
+            gcc \
+            g++ \
+            gcc-multilib \
+            g++-multilib \
+            bison \
+            flex \
+            pkg-config \
             python3 \
             python3-pip \
             python3-venv \
             git \
             curl \
             wget \
-            pkg-config \
             zip \
             unzip \
             file \
-            flex \
-            bison \
-            gettext \
             autoconf \
             automake \
             libtool \
+            gettext \
             libx11-dev \
             libxext-dev \
             libxrender-dev \
@@ -52,93 +57,127 @@ jobs:
             libxcursor-dev \
             libfreetype6-dev \
             libfontconfig1-dev \
-            gcc-multilib \
-            g++-multilib
+            libvulkan-dev \
+            libgnutls28-dev \
+            libasound2-dev \
+            libpulse-dev \
+            zlib1g-dev
 
       - name: Install Python dependencies
         run: |
-          python3 -m pip install --user --break-system-packages pyyaml
-
-      - name: Check repository
-        run: |
-          git status
-          git submodule status
+          python3 -m pip install \
+            --user \
+            --break-system-packages \
+            pyyaml
 
       - name: Check setup
         run: |
           python3 tools/check_setup.py
 
-      - name: Make scripts executable
+      - name: Make build scripts executable
         run: |
           chmod +x tools/build_native.sh
           chmod +x tools/build_wine_runtime.sh
           chmod +x tools/build_wine_ps5.sh
 
-      # ---------------------------------------------------------
-      # 1. Build the PS5 native foundation/application
-      # ---------------------------------------------------------
       - name: Build native PS5 application
         run: |
           ./tools/build_native.sh
 
-      # ---------------------------------------------------------
-      # 2. Build HOST Wine
-      #
-      # This creates:
-      # .deps/wine/build/tools/winebuild
-      #
-      # build_wine_ps5.sh requires this.
-      # ---------------------------------------------------------
       - name: Build host Wine runtime
         run: |
           ./tools/build_wine_runtime.sh
 
-      # ---------------------------------------------------------
-      # 3. Build Wine for PS5
-      # ---------------------------------------------------------
-      - name: Build Wine PS5 modules
+      - name: Verify host Wine tools
+        run: |
+          echo "Checking host Wine..."
+
+          if [ ! -d ".deps/wine/build" ]; then
+            echo "ERROR: .deps/wine/build does not exist"
+            exit 1
+          fi
+
+          find .deps/wine/build -type f \
+            \( -name winebuild -o -name winegcc -o -name wineserver \) \
+            -print || true
+
+          echo "Host Wine directory:"
+          ls -la .deps/wine/build || true
+
+      - name: Build Wine PS5
         run: |
           ./tools/build_wine_ps5.sh
 
-      # ---------------------------------------------------------
-      # Show everything that was generated
-      # ---------------------------------------------------------
-      - name: Show build output
+      - name: Dump Wine PS5 configure log
         if: always()
-        shell: bash
+        run: |
+          echo "========================================"
+          echo "WINE PS5 CONFIGURE LOG"
+          echo "========================================"
+
+          if [ -f ".deps/wine-ps5/configure.log" ]; then
+            cat ".deps/wine-ps5/configure.log"
+          else
+            echo "configure.log not found"
+          fi
+
+          echo "========================================"
+          echo "WINE PS5 CONFIG.LOG"
+          echo "========================================"
+
+          if [ -f ".deps/wine-ps5/config.log" ]; then
+            cat ".deps/wine-ps5/config.log"
+          else
+            echo "config.log not found"
+          fi
+
+          echo "========================================"
+          echo "CONFIGURE ERRORS"
+          echo "========================================"
+
+          grep -iE \
+            "error:|failed|not found|cannot|unsupported|missing" \
+            ".deps/wine-ps5/configure.log" \
+            ".deps/wine-ps5/config.log" \
+            2>/dev/null || true
+
+      - name: Show build directories
+        if: always()
         run: |
           echo "========================================"
           echo "DIST"
           echo "========================================"
-          find dist -maxdepth 8 -type f -print 2>/dev/null || true
+
+          find dist \
+            -maxdepth 8 \
+            -type f \
+            -print 2>/dev/null || true
 
           echo "========================================"
           echo "BUILD"
           echo "========================================"
-          find build -maxdepth 8 -type f -print 2>/dev/null | head -1000 || true
+
+          find build \
+            -maxdepth 8 \
+            -type f \
+            -print 2>/dev/null | head -1000 || true
 
           echo "========================================"
-          echo "WINE"
+          echo "DEPS"
           echo "========================================"
-          find .deps/wine -maxdepth 5 -type f -print 2>/dev/null | head -1000 || true
 
-          echo "========================================"
-          echo "WINE PS5"
-          echo "========================================"
-          find .deps/wine-ps5 -maxdepth 8 -type f -print 2>/dev/null | head -1000 || true
+          find .deps \
+            -maxdepth 6 \
+            -type f \
+            -print 2>/dev/null | head -1000 || true
 
-      # ---------------------------------------------------------
-      # Upload final files
-      # ---------------------------------------------------------
-      - name: Upload PS5 build
-        if: success()
+      - name: Upload configure logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: prospero-win-ps5
+          name: ps5-configure-debug
           path: |
-            dist/**
-            build/**
-            .deps/wine-runtime/**
-            .deps/wine-ps5/**
-          if-no-files-found: error
+            .deps/wine-ps5/configure.log
+            .deps/wine-ps5/config.log
+          if-no-files-found: ignore
           retention-days: 7
